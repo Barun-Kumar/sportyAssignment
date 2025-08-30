@@ -1,201 +1,499 @@
-# sportyAssignment
+# Sporty F1 Betting Service
 
-# Formula 1 Betting Service — High-Level Design & API Spec (v0.1)
+Minimal F1 betting microservice. Users can:
+1) Discover **events** (e.g., Race/Sprint sessions for a year/country)
+2) Fetch **drivers** with **deterministic odds** (values ∈ {2, 3, 4})
+3) **Place a bet** on a driver
+4) **Settle** an event by declaring the winner; all pending bets are resolved
 
-> Goal: A simple-but-solid backend for single-winner bets on F1 sessions ("events"), with user gift balance, deterministic odds (2/3/4), event settlement, and a pluggable data-provider layer.
+> **Deterministic Odds:** Computed via a SHA-256 hash derived from `(provider | eventId | driverId)` and mapped to one of **2, 3, 4**. Same input → same odds. No DB row required for odds.
+
+---
+
+## Table of Contents
+- [Quick Start](#quick-start)
+    - [Run locally (Gradle)](#run-locally-gradle)
+    - [Configuration](#configuration)
+    - [Verify the service](#verify-the-service)
+- [API Reference](#api-reference)
+    - [1) List Events](#1-list-events)
+    - [2) List Drivers for an Event](#2-list-drivers-for-an-event)
+    - [3) Place Driver Bet](#3-place-driver-bet)
+    - [4) Settle Event Result](#4-settle-event-result)
+- [End-to-End Flow](#end-to-end-flow)
+- [High-Level Design (HLD)](#high-level-design-hld)
+- [Low-Level Design (LLD)](#low-level-design-lld)
+- [Error Handling](#error-handling)
+- [Assumptions & Limitations](#assumptions--limitations)
+- [Future Enhancements](#future-enhancements)
 
 ---
 
-## 1) Scope & Assumptions
+## Quick Start
 
-* Users are pre-registered and each starts with **€100** gift balance.
-* Only **single bets** on **one driver to win** a specific F1 event (race/qualy/etc.).
-* Odds allowed: **2**, **3**, **4** (treated as decimal odds multiplier).
-* We must support multiple provider APIs in the future; initial provider: **OpenF1** ("Sessions").
-* We will expose a minimal REST API for: list events (with driver market), place bet, settle event, query balances/bets.
-* Currency: EUR. We will use **decimal** arithmetic.
+### Run locally (Gradle)
+> Requires JDK 17+ (11+ may work if project is configured). Gradle wrapper is included.
+
+```bash
+# 1) Clone
+git clone https://github.com/Barun-Kumar/sportyAssignment.git
+cd sportyAssignment
+
+# 2) Run
+./gradlew bootRun
+
+# Alternatively, build a fat JAR and run
+./gradlew clean build
+java -jar build/libs/*.jar
+````
+By default, the app starts on http://localhost:8080
+.
+
+##Configuration
+
+````
+# Server
+server.port=8080
+
+# Provider (OpenF1-like)
+app.provider.name=openf1
+app.provider.base-url=https://api.openf1.org/v1
+app.provider.connect-timeout=2000
+app.provider.read-timeout=5000
+app.provider.cache-ttl-seconds=900
+
+# Odds (deterministic)
+app.odds.enabled=true
+# Odds engine uses (provider|eventId|driverId) as seed; no secret required.
+
+# Logging
+logging.level.root=INFO
+logging.level.com.sporty=DEBUG
+
+````
+If the app uses in-memory repositories, no DB config is needed.
+If using JPA, configure your datasource (H2/Postgres) here and provide DDL/migrations.
+
+##Verify the service
+Open a browser or use curl to call the endpoints below.
+
+###API Reference (Base URL: http://localhost:8080)
+###1) List Events
+
+```
+GET /v1/event
+Query: sessionType (e.g., Race), year (e.g., 2025), country (optional), page (0), size (50)
+
+Example
+GET /v1/event?sessionType=Race&year=2025
+
+[
+  {
+    "sessionKey": 9693,
+    "meetingKey": 1254,
+    "sessionName": "Race",
+    "sessionType": "Race",
+    "year": 2025,
+    "countryName": "Australia",
+    "countryCode": "AUS",
+    "countryKey": 5,
+    "circuitKey": 10,
+    "circuitShortName": "Melbourne",
+    "location": "Melbourne",
+    "dateStart": "2025-03-16T04:00:00+00:00",
+    "dateEnd": "2025-03-16T06:00:00+00:00",
+    "gmtOffset": "11:00:00"
+  },
+  {
+    "sessionKey": 9998,
+    "meetingKey": 1255,
+    "sessionName": "Race",
+    "sessionType": "Race",
+    "year": 2025,
+    "countryName": "China",
+    "countryCode": "CHN",
+    "countryKey": 53,
+    "circuitKey": 49,
+    "circuitShortName": "Shanghai",
+    "location": "Shanghai",
+    "dateStart": "2025-03-23T07:00:00+00:00",
+    "dateEnd": "2025-03-23T09:00:00+00:00",
+    "gmtOffset": "08:00:00"
+  }
+]
+
+curl "http://localhost:8080/v1/event?sessionType=Race&year=2025"
+
+```
+
+##2) List Drivers for an Event
+
+```
+GET /v1/events/{sessionKey}/drivers
+Path: sessionKey (e.g., 9998)
+GET /v1/events/9998/drivers
+curl "http://localhost:8080/v1/events/9998/drivers"
+
+{
+  "eventId": "9998",
+  "eventName": "Race",
+  "location": "Shanghai",
+  "country": "CHN",
+  "dateStart": "2025-03-23T07:00:00+00:00",
+  "dateEnd": "2025-03-23T09:00:00+00:00",
+  "drivers": [
+    { "providerDriverId": 1,  "name": "Max VERSTAPPEN",   "odd": 3 },
+    { "providerDriverId": 4,  "name": "Lando NORRIS",     "odd": 3 },
+    { "providerDriverId": 5,  "name": "Gabriel BORTOLETO","odd": 4 },
+    { "providerDriverId": 6,  "name": "Isack HADJAR",     "odd": 2 },
+    { "providerDriverId": 7,  "name": "Jack DOOHAN",      "odd": 3 },
+    { "providerDriverId": 10, "name": "Pierre GASLY",     "odd": 3 },
+    { "providerDriverId": 12, "name": "Kimi ANTONELLI",   "odd": 2 },
+    { "providerDriverId": 14, "name": "Fernando ALONSO",  "odd": 4 },
+    { "providerDriverId": 16, "name": "Charles LECLERC",  "odd": 3 },
+    { "providerDriverId": 18, "name": "Lance STROLL",     "odd": 2 },
+    { "providerDriverId": 22, "name": "Yuki TSUNODA",     "odd": 3 },
+    { "providerDriverId": 23, "name": "Alexander ALBON",  "odd": 4 },
+    { "providerDriverId": 27, "name": "Nico HULKENBERG",  "odd": 2 },
+    { "providerDriverId": 30, "name": "Liam LAWSON",      "odd": 2 },
+    { "providerDriverId": 31, "name": "Esteban OCON",     "odd": 3 },
+    { "providerDriverId": 44, "name": "Lewis HAMILTON",   "odd": 4 },
+    { "providerDriverId": 55, "name": "Carlos SAINZ",     "odd": 3 },
+    { "providerDriverId": 63, "name": "George RUSSELL",   "odd": 2 },
+    { "providerDriverId": 81, "name": "Oscar PIASTRI",    "odd": 2 },
+    { "providerDriverId": 87, "name": "Oliver BEARMAN",   "odd": 2 }
+  ]
+}
+
+```
+
+
+##3) Place Bet on Driver
+```
+POST /v1/bets/driver
+
+Request Body
+{
+  "userId": "varun@sporty.test",
+  "sessionKey": "9998",
+  "providerDriverId": "1",
+  "stake": 100.00,
+  "odds": 3
+}
+
+Sample Response
+
+{
+  "betId": "9978d3d1-2878-4e32-b1e9-779ed4a055ba",
+  "sessionKey": "9998",
+  "providerDriverId": "1",
+  "stake": 100.00,
+  "odds": 3.00,
+  "status": "PENDING",
+  "result": null,
+  "payout": null,
+  "potentialPayout": 300.00,
+  "placedAt": "2025-09-05T17:49:27.192076Z",
+  "settledAt": null,
+  "userId": "varun@sporty.test"
+}
+
+
+```
+Validation
+stake > 0
+odds ∈ {2, 3, 4} and must match server-computed odds for (sessionKey, providerDriverId)
+potentialPayout = stake * odds
+
+curl -X POST "http://localhost:8080/v1/bets/driver" \
+-H "Content-Type: application/json" \
+-d '{"userId":"varun@sporty.test","sessionKey":"9998","providerDriverId":"1","stake":100.00,"odds":3}'
+
+##4) Settle Event Result
+
+```
+POST /v1/event/result
+Request Body
+{
+  "sessionKey": "9998",
+  "winnerDriverId": "1"
+}
+
+Sample Response (array of updated bets)
+
+[
+  {
+    "betId": "9978d3d1-2878-4e32-b1e9-779ed4a055ba",
+    "sessionKey": "9998",
+    "providerDriverId": "1",
+    "stake": 100.00,
+    "odds": 3.00,
+    "status": "SETTLED",
+    "result": "WIN",
+    "payout": 300.00,
+    "potentialPayout": 300.00,
+    "placedAt": "2025-09-05T17:49:27.192076Z",
+    "settledAt": "2025-09-05T17:49:37.266053Z",
+    "userId": "varun@sporty.test"
+  },
+  {
+    "betId": "cdb5edc7-cc86-43f3-a160-c5fb49c1a949",
+    "sessionKey": "9998",
+    "providerDriverId": "1",
+    "stake": 100.00,
+    "odds": 3.00,
+    "status": "SETTLED",
+    "result": "WIN",
+    "payout": 300.00,
+    "potentialPayout": 300.00,
+    "placedAt": "2025-09-05T17:49:25.818302Z",
+    "settledAt": "2025-09-05T17:49:37.267495Z",
+    "userId": "varun@sporty.test"
+  },
+  {
+    "betId": "38ffd196-c2a2-42f2-8f03-0cb273b171b0",
+    "sessionKey": "9998",
+    "providerDriverId": "1",
+    "stake": 100.00,
+    "odds": 3.00,
+    "status": "SETTLED",
+    "result": "WIN",
+    "payout": 300.00,
+    "potentialPayout": 300.00,
+    "placedAt": "2025-09-05T17:49:28.170598Z",
+    "settledAt": "2025-09-05T17:49:37.267649Z",
+    "userId": "varun@sporty.test"
+  }
+]
+
+```
+Idempotence
+
+Settlement is idempotent by sessionKey—re-settling should not double-credit.
+
+cURL
+curl -X POST "http://localhost:8080/v1/event/result" \
+-H "Content-Type: application/json" \
+-d '{"sessionKey":"9998","winnerDriverId":"1"}'
+
+##End-to-End Flow
+
+sequenceDiagram
+autonumber
+actor U as User
+participant API as API Layer (Spring MVC)
+participant ES as EventService
+participant DS as DriverService
+participant OE as OddsEngine
+participant BS as BetService
+participant RS as ResultService
+participant PR as ProviderAdapter (OpenF1)
+participant REPO as Repositories
+
+    U->>API: GET /v1/event?sessionType=Race&year=2025
+    API->>ES: findEvents(filters)
+    ES->>PR: fetchSessions(filters)
+    PR-->>ES: session list
+    ES-->>API: events[]
+    API-->>U: 200 OK
+
+    U->>API: GET /v1/events/{sessionKey}/drivers
+    API->>DS: listDrivers(sessionKey)
+    DS->>PR: fetchDrivers(sessionKey)
+    PR-->>DS: drivers[]
+    DS->>OE: computeOdds(sessionKey, driverId)
+    OE-->>DS: {2|3|4}
+    DS-->>API: drivers with odds
+    API-->>U: 200 OK
+
+    U->>API: POST /v1/bets/driver
+    API->>BS: placeBet(req)
+    BS->>OE: validateOdds(sessionKey, driverId)
+    OE-->>BS: expectedOdds
+    BS->>REPO: createBet(PENDING)
+    REPO-->>BS: bet
+    BS-->>API: bet + potentialPayout
+    API-->>U: 201 Created
+
+    U->>API: POST /v1/event/result
+    API->>RS: settle(sessionKey, winnerDriverId)
+    RS->>REPO: findPendingBets(sessionKey)
+    REPO-->>RS: bets[]
+    RS->>REPO: update each bet (SETTLED, WIN/LOSE, payout)
+    REPO-->>RS: updated bets[]
+    RS-->>API: bets[]
+    API-->>U: 200 OK
+
+
+
+## High-Level Design (HLD)
+
+```mermaid
+graph LR
+  subgraph API Layer
+    C1[EventController]
+    C2[DriverController]
+    C3[BetController]
+    C4[ResultController]
+  end
+
+  subgraph Domain/Use Cases
+    S1[EventService]
+    S2[DriverService]
+    S3[BetService]
+    S4[ResultService]
+    OE[[OddsEngine]]
+  end
+
+  subgraph Ports & Adapters
+    P1[(ProviderPort)]
+    A1[OpenF1Adapter]
+    P2[(BetRepository)]
+    P3[(UserRepository)]
+    P4[(EventRepository)]
+    P5[(DriverRepository)]
+  end
+
+  C1 --> S1 --> P1
+  C2 --> S2 --> P1
+  S2 --> OE
+  C3 --> S3 --> OE
+  S3 --> P2
+  C4 --> S4 --> P2
+  S1 --> P4
+  S2 --> P5
+  S3 --> P3
+
+  P1 <---> A1
+```
+
+**Key Points**
+
+* **Hexagonal** style separation of Controllers → Services → Ports/Adapters
+* **Provider Adapter** abstracts external OpenF1 API (or a local mock) with caching
+* **OddsEngine** is stateless & deterministic
+* **Repositories** can be in-memory or JPA-backed; the rest of the app is agnostic
 
 ---
+
+## Low-Level Design (LLD)
+
+### Core Models
+
+* `EventDTO`: `sessionKey`, `meetingKey`, `sessionName`, `sessionType`, `year`, `countryName/Code/Key`, `circuitKey`, `circuitShortName`, `location`, `dateStart/End`, `gmtOffset`
+* `EventDriversDTO`: `eventId`, meta + `List<DriverOddsDTO>`
+* `DriverOddsDTO`: `providerDriverId`, `name`, `odd`
+* `Bet`: `betId`, `userId`, `sessionKey`, `providerDriverId`, `stake`, `odds`, `status(PENDING|SETTLED)`, `result(WIN|LOSE|null)`, `potentialPayout`, `payout`, `placedAt`, `settledAt`
+
+> **Money Handling:** Expose decimals in JSON (e.g., `100.00`) but store/compute in **cents** internally where possible to avoid floating-point drift. If decimals are kept, use `BigDecimal` with proper scale and rounding.
+
+### Services (Core Logic)
+
+* **EventService**
+
+    * `findEvents(filters)`: maps provider sessions → `EventDTO` list
+* **DriverService**
+
+    * `listDrivers(sessionKey)`: provider drivers + `OddsEngine.computeOdds(...)`
+* **BetService**
+
+    * `placeBet(req)`: validate odds & stake → create bet (PENDING) → return with `potentialPayout`
+* **ResultService**
+
+    * `settle(sessionKey, winnerDriverId)`: resolve all PENDING bets for session → set status/result → compute `payout`
+
+### OddsEngine (Deterministic)
+
+Pseudo:
+
+```java
+int computeOdds(String provider, String eventId, String driverId) {
+  String seed = provider + "|" + eventId + "|" + driverId;
+  byte[] hash = sha256(seed);
+  // Use first 4 bytes as unsigned int
+  long v = ((hash[0] & 0xFFL) << 24) | ((hash[1] & 0xFFL) << 16) |
+           ((hash[2] & 0xFFL) << 8)  |  (hash[3] & 0xFFL);
+  int idx = (int)(v % 3); // 0..2
+  int[] bucket = {2,3,4};
+  return bucket[idx];
+}
+```
+
+### Repositories
+
+* `BetRepository`: `save`, `findBySessionKeyAndStatus`, `updateStatusAndPayout`
+* `UserRepository` *(if present)*: `find`, `save`, `adjustBalance` (optional if balance is tracked)
+* `EventRepository`/`DriverRepository`: cached projections of provider data
+
+### Controllers
+
+* **EventController**: `GET /v1/event`
+* **DriverController**: `GET /v1/events/{sessionKey}/drivers`
+* **BetController**: `POST /v1/bets/driver`
+* **ResultController**: `POST /v1/event/result`
+
+### Validation & Idempotence
+
+* Bean Validation on request DTOs (`@NotNull`, `@Positive`)
+* Result settlement idempotent per `sessionKey`
+
+---
+
+## Error Handling
+
+* `400 Bad Request`: invalid stake/odds/sessionKey/driverId
+* `404 Not Found`: event/driver not found
+* `409 Conflict`: client odds mismatch with server odds
+* `422 Unprocessable Entity`: cannot settle (already settled or inconsistent state)
+* `500 Internal Server Error`: unhandled errors
+
+Standard error payload:
+
+```json
+{ "timestamp": "...", "status": 400, "error": "Bad Request", "message": "<details>", "path": "/v1/bets/driver" }
+```
+
+---
+
+## Assumptions & Limitations
+
+* Single market: **Winner (Driver)** per event
+* Odds are limited to **2, 3, 4** via deterministic engine
+* Authentication/authorization is **not** implemented
+* Currency handling: examples show decimals; prefer `BigDecimal` internally or cents
+* Provider dependency: if upstream API is down, driver/event fetch may degrade
+
+---
+
 
 ## 2) Architecture (Hexagonal / Clean)
 
 * **API Layer** (Spring controllers / handlers)
 * **Application Services** (use-cases):
 
-  * `ListEventsService`
-  * `PlaceBetService`
-  * `SettleEventService`
-  * `GetUserBalanceService`
-  * `ListBetsService`
+    * `ListEventsService`
+    * `PlaceBetService`
+    * `SettleEventService`
+    * `GetUserBalanceService`
+    * `ListBetsService`
 * **Domain**:
 
-  * Entities: `User`, `Bet`, `EventRef`, `Odds`
-  * Value Objects: `Money(EUR)`, `Odds(2|3|4)`, `BetStatus(PENDING|WON|LOST)`
+    * Entities: `User`, `Bet`, `EventRef`, `Odds`
+    * Value Objects: `Money(EUR)`, `Odds(2|3|4)`, `BetStatus(PENDING|WON|LOST)`
 * **Ports** (interfaces):
 
-  * `F1ProviderPort` (get sessions, drivers per session)
-  * `RandomOddsPort` (2/3/4 generator, deterministic per event+driver)
-  * `BetRepository`, `UserRepository`, `LedgerRepository`, `OutcomeRepository`
+    * `F1ProviderPort` (get sessions, drivers per session)
+    * `RandomOddsPort` (2/3/4 generator, deterministic per event+driver)
+    * `BetRepository`, `UserRepository`, `LedgerRepository`, `OutcomeRepository`
 * **Adapters**:
 
-  * Provider: `OpenF1Adapter` (maps provider fields → domain)
-  * Persistence: JPA/SQL (Postgres/MySQL/SQL Server – ANSI SQL where possible)
-  * Odds: deterministic PRNG seeded from `(provider, eventKey, driverKey)`
+    * Provider: `OpenF1Adapter` (maps provider fields → domain)
+    * Persistence: JPA/SQL (Postgres/MySQL/SQL Server – ANSI SQL where possible)
+    * Odds: deterministic PRNG seeded from `(provider, eventKey, driverKey)`
 * **Storage**: Relational DB + optional Redis cache for event/session lists.
 
 ---
 
-## 3) Domain IDs & Provider-Agnostic Model
-
-* **EventRef**: `{provider:"OPENF1", providerEventId:"<session_key>"}`
-* **DriverRef**: `{provider:"OPENF1", providerDriverId:"<driver_number or driver_id>"}`
-* **Internal IDs**:
-
-  * `event_id` (UUID) ↔ unique `(provider, provider_event_id)`
-  * `driver_id` (UUID) ↔ unique `(provider, provider_driver_id)`
-* **Bet** keeps snapshots: `odds_at_placement`, `driver_name_at_placement`, `event_label_at_placement` to avoid inconsistent future changes.
-
----
-
-## 4) API Design
-
-### 4.1 List Events + Driver Market
-
-**GET** `/v1/events`
-**Query params** (all optional):
-
-* `sessionType` (e.g., RACE, QUALIFYING, PRACTICE)
-* `year` (e.g., 2024)
-* `country` (e.g., ITALY)
-* `page`, `size`
-
-**Response (200)**
-
-```json
-{
-  "events": [
-    {
-      "eventId": "9d479f8e-...",            // internal UUID
-      "label": "2024 Italian GP — Race",     
-      "provider": "OPENF1",
-      "providerEventId": "9159",           // example session_key
-      "sessionType": "RACE",
-      "country": "ITALY",
-      "scheduledAt": "2024-09-01T13:00:00Z",
-      "driverMarket": [
-        {
-          "driverId": "8be3370a-...",      // internal UUID
-          "driverName": "Max Verstappen",
-          "providerDriverId": "33",
-          "odds": 3                          // deterministic 2|3|4 for this event+driver
-        }
-      ]
-    }
-  ],
-  "page": {"number": 0, "size": 50, "total": 120}
-}
-```
-
-**Behaviour**
-
-* Events are fetched from `F1ProviderPort` and mapped to domain.
-* For **each driver** in the session, we compute **deterministic odds** via `RandomOddsPort` (see §6) and include it in `driverMarket`.
-* Caching: 5–15 min cache for event lists; driver roster cached per session. On cache miss we hydrate from provider.
-
----
-
-### 4.2 Place a Bet
-
-**POST** `/v1/bets`
-
-```json
-{
-  "userId": "u-123",
-  "eventId": "9d479f8e-...",
-  "driverId": "8be3370a-...",
-  "stake": "25.00",
-  "clientOdds": 3
-}
-```
-
-**Rules**
-
-* Validate `clientOdds ∈ {2,3,4}` and must equal our computed odds for `(eventId, driverId)` at the moment of placement.
-* User must have sufficient balance.
-
-**Side effects (transactional)**
-
-1. Insert `Bet(PENDING)` with `odds_at_placement`.
-2. Deduct `stake` from `User.balance`.
-3. Append ledger entry: `DEBIT_BET_PLACED`.
-
-**Response (201)**
-
-```json
-{
-  "betId": "b-789",
-  "status": "PENDING",
-  "stake": "25.00",
-  "odds": 3,
-  "potentialPayout": "75.00"
-}
-```
-
-> *Note:* We treat **decimal odds**; net profit if won = `stake * odds - stake`. The system credits **gross payout** on win; stake was already deducted at placement.
-
----
-
-### 4.3 Get User Balance
-
-**GET** `/v1/users/{userId}/balance`
-
-```json
-{ "userId": "u-123", "balance": "68.50" }
-```
-
-### 4.4 List Bets (by user)
-
-**GET** `/v1/bets?userId=u-123&status=PENDING|WON|LOST`
-
-```json
-{
-  "bets": [
-    {
-      "betId": "b-789",
-      "event": { "label": "2024 Italian GP — Race" },
-      "driver": { "name": "Max Verstappen" },
-      "stake": "25.00",
-      "odds": 3,
-      "status": "PENDING",
-      "placedAt": "2025-08-30T09:21:00Z"
-    }
-  ]
-}
-```
-
-### 4.5 Settle Event Outcome
-
-**POST** `/v1/events/{eventId}/settle`
-
-```json
-{ "winnerDriverId": "8be3370a-..." }
-```
-
-**Behaviour (idempotent, transactional)**
-
-1. Write/Upsert `Outcome(eventId, winnerDriverId)`.
-2. For all `PENDING` bets of the event:
-
-   * If bet.driverId == winner → `status=WON`, credit `stake*odds` to user balance, ledger `CREDIT_PAYOUT`.
-   * Else → `status=LOST`.
-
-**Response**
-
-```json
-{ "eventId": "9d479f8e-...", "settled": {"won": 42, "lost": 213} }
-```
-
----
 
 ## 5) Persistence Model (ANSI SQL)
 
@@ -262,148 +560,10 @@ CREATE TABLE user_ledger (
 );
 ```
 
-> Money handling: store in **cents** (BIGINT). Convert to/from string at API edges.
 
----
 
-## 6) Odds Engine (Deterministic 2/3/4)
 
-We want stable odds per `(event, driver)` to avoid UI flicker between calls while satisfying the "random 2/3/4" constraint.
 
-**Algorithm:**
 
-```
-seed = SHA-256( provider + ":" + providerEventId + ":" + providerDriverId )
-num  = (first_4_bytes_of_seed as unsigned) % 3
-odds = [2,3,4][num]
-```
 
-* Deterministic = same odds for the same event+driver.
-* Still “random” across pairs.
-* If you prefer true-random each call, switch to `SecureRandom` at request time and **require** client to echo `clientOdds` in POST to avoid mismatch.
 
----
-
-## 7) Provider Port & Adapter (OpenF1 example)
-
-**Port**
-
-```java
-interface F1ProviderPort {
-  List<EventDTO> listEvents(EventFilter f, PageReq p);
-  List<DriverDTO> listDriversForEvent(EventDTO e);
-}
-```
-
-**Adapter responsibilities**
-
-* Map provider fields to domain (`session_key` → `providerEventId`, driver number/id → `providerDriverId`).
-* Normalize session types (e.g., RACE/QUALIFYING/PRACTICE).
-* Cache defensive: 5–15 minutes for list endpoints.
-
-**EventFilter**
-
-```
-{ sessionType?:RACE|QUALIFYING|PRACTICE, year?:int, country?:string }
-```
-
----
-
-## 8) Use‑Case Flows (happy paths)
-
-### 8.1 List Events
-
-1. API → `ListEventsService`
-2. Service → `F1ProviderPort.listEvents(filter)`
-3. For each event → `listDriversForEvent`
-4. Compute odds per driver (deterministic) and return.
-
-### 8.2 Place Bet
-
-1. Validate input + recompute odds for `(event,driver)` → must equal `clientOdds` (anti-race condition contract).
-2. TX: create bet (PENDING) + deduct stake from user + ledger.
-
-### 8.3 Settle Event
-
-1. Upsert `Outcome(eventId)` with winner.
-2. In a single TX:
-
-   * Query all PENDING bets for `eventId` with `FOR UPDATE SKIP LOCKED` batching if large.
-   * For each: set WON/LOST; credit payout for wins; ledger; set `settled_at`.
-
-**Idempotency:** If outcome exists, re-run settlement should be a no-op (no double crediting). Optionally keep `bets.status != PENDING` guard.
-
----
-
-## 9) Error Handling & Status Codes
-
-* 400: invalid odds, stake <= 0, bad filters
-* 402: insufficient balance
-* 404: event/driver not found
-* 409: settlement already performed with different winner
-* 422: provider unavailable (retry later)
-
----
-
-## 10) Non‑Functional
-
-* **Perf**: list events < 300–500ms (provider + cache); place bet/settle < 50ms (DB-bound).
-* **Scale**: Bets table indexed by (event, status). Settlement batches in pages of 1–5k with `SKIP LOCKED`.
-* **Audit**: Immutable `user_ledger` for all balance changes.
-* **Observability**: counters for bets placed, wins, losses; histograms for latency; gauge of outstanding PENDING per event.
-* **Security**: Auth via API key/JWT (userId asserted by upstream). Input validation, rate limiting.
-
----
-
-## 11) Minimal Spring Boot Skeleton (interfaces)
-
-```java
-@RestController
-class EventsController {
-  @GetMapping("/v1/events") ListEventsResponse list(...)
-  @PostMapping("/v1/events/{eventId}/settle") SettleResponse settle(...)
-}
-
-@RestController
-class BetsController {
-  @PostMapping("/v1/bets") PlaceBetResponse place(...)
-  @GetMapping("/v1/bets") ListBetsResponse list(...)
-}
-
-@RestController
-class UsersController {
-  @GetMapping("/v1/users/{id}/balance") BalanceResponse get(...)
-}
-```
-
-Service Interfaces:
-
-```java
-interface PlaceBetService { PlaceBetResponse place(PlaceBetCommand cmd); }
-interface ListEventsService { ListEventsResponse list(Filter f, Page p); }
-interface SettleEventService { SettleResponse settle(UUID eventId, UUID winnerDriverId); }
-```
-
----
-
-## 12) Test Plan
-
-* **Unit**: odds function (distribution, determinism), money math, domain transitions.
-* **Integration**: happy-path bet and settlement with H2/Postgres. Provider adapter with WireMock fixtures.
-* **Load**: 1k bets/sec; settlement batch of 100k PENDING in < 60s.
-* **Contract**: snapshot tests for JSON payloads.
-
----
-
-## 13) Future Work
-
-* Multiple providers (add `Jolpica-F1/Ergast-compatible` adapter).
-* Caching layer with Redis.
-* Idempotency-Key on `/v1/bets` to avoid duplicate submissions.
-* User bet limits, per-event limits, and responsible gaming checks.
-* Multi-currency and wallet service abstraction.
-* Pricing service (real odds), risk controls.
-
----
-
-**Done.** This document is implementation-ready: create entities, repositories, service flows, and the provider adapter. Ping to expand any section into code.
