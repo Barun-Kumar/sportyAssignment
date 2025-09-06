@@ -44,12 +44,12 @@ cd sportyAssignment
 
 # Alternatively, build a fat JAR and run
 ./gradlew clean build
-java -jar build/libs/*.jar
+java -jar build/libs/f1bettingService-0.0.1-SNAPSHOT.jar
 ````
 By default, the app starts on http://localhost:8080
 .
 
-##Configuration
+##Configuration (This is not Rquired to run as of now) 
 
 ````
 # Server
