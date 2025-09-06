@@ -71,8 +71,9 @@ logging.level.root=INFO
 logging.level.com.sporty=DEBUG
 
 ````
-If the app uses in-memory repositories, no DB config is needed.
-If using JPA, configure your datasource (H2/Postgres) here and provide DDL/migrations.
+Currently the app uses in-memory repositories, no DB config is needed.
+
+Later we can use JPA and configure our datasource (H2/Postgres) here and provide DDL/migrations.
 
 ##Verify the service
 Open a browser or use curl to call the endpoints below.
@@ -85,7 +86,7 @@ GET /v1/event
 Query: sessionType (e.g., Race), year (e.g., 2025), country (optional), page (0), size (50)
 
 Example
-GET /v1/event?sessionType=Race&year=2025
+GET http://localhost:8080/v1/event?sessionType=Race&year=2025
 
 [
   {
@@ -131,7 +132,7 @@ curl "http://localhost:8080/v1/event?sessionType=Race&year=2025"
 ```
 GET /v1/events/{sessionKey}/drivers
 Path: sessionKey (e.g., 9998)
-GET /v1/events/9998/drivers
+GET localhost:8080/v1/events/9998/drivers
 curl "http://localhost:8080/v1/events/9998/drivers"
 
 {
@@ -170,7 +171,7 @@ curl "http://localhost:8080/v1/events/9998/drivers"
 
 ##3) Place Bet on Driver
 ```
-POST /v1/bets/driver
+POST localhost:8080/v1/bets/driver
 
 Request Body
 {
@@ -212,7 +213,7 @@ curl -X POST "http://localhost:8080/v1/bets/driver" \
 ##4) Settle Event Result
 
 ```
-POST /v1/event/result
+POST localhost:8080/v1/event/result
 Request Body
 {
   "sessionKey": "9998",
